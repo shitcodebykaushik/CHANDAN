@@ -55,9 +55,13 @@ final class ApiHandler implements HttpHandler {
         HttpUtil.sendJson(exchange, 400, "{\"error\":\"Missing plate or zone\"}");
         return;
       }
-      Map<String, Object> v = DataStore.bookVehicle(plate, zone);
-      String token = Objects.toString(v.get("token"), "");
-      String payload = "{\"token\":\"" + JsonUtil.jsonEscape(token) + "\",\"vehicle\":" + JsonUtil.toJsonObject(v) + "}";
+      DataStore.BookingResult result = DataStore.bookVehicle(plate, zone);
+      if (!result.success) {
+        HttpUtil.sendJson(exchange, 409, "{\"error\":\"" + JsonUtil.jsonEscape(result.msg) + "\"}");
+        return;
+      }
+      String token = Objects.toString(result.vehicle.get("token"), "");
+      String payload = "{\"token\":\"" + JsonUtil.jsonEscape(token) + "\",\"vehicle\":" + JsonUtil.toJsonObject(result.vehicle) + "}";
       HttpUtil.sendJson(exchange, 200, payload);
       return;
     }

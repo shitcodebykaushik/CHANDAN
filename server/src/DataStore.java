@@ -11,6 +11,7 @@ import java.util.Random;
 final class DataStore {
   private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm", Locale.US);
   private static final Random RANDOM = new Random();
+  private static final int MAX_ZONE_VEHICLES = 5;
 
   private static final List<Map<String, Object>> ZONES = new ArrayList<>();
   private static final List<Map<String, Object>> OCCUPANCY = new ArrayList<>();
@@ -77,7 +78,12 @@ final class DataStore {
     return MARKERS;
   }
 
-  static Map<String, Object> bookVehicle(String plate, String zone) {
+  static BookingResult bookVehicle(String plate, String zone) {
+    int count = countZoneVehicles(zone, null);
+    if (count >= MAX_ZONE_VEHICLES) {
+      return new BookingResult(false, "Zone is at maximum capacity (5 vehicles).", null);
+    }
+
     String token = generateToken();
     String id = "V-" + (200 + RANDOM.nextInt(800));
     Map<String, Object> v = vehicle(id, normalizePlate(plate), "booked", token, zone, "-");
@@ -85,7 +91,7 @@ final class DataStore {
       VEHICLES.add(0, v);
     }
     pushActivity("entry", "Booking created for " + plate + " in " + zone);
-    return v;
+    return new BookingResult(true, "Booking created", v);
   }
 
   static VerifyResult verifyToken(String token) {
@@ -104,12 +110,32 @@ final class DataStore {
       if ("parked".equalsIgnoreCase(status)) {
         return new VerifyResult(false, "Vehicle " + found.get("plate") + " is already parked.", found);
       }
+      String zone = Objects.toString(found.get("zone"), "");
+      int parkedCount = countZoneVehicles(zone, "parked");
+      if (parkedCount >= MAX_ZONE_VEHICLES) {
+        return new VerifyResult(false, "Zone is at maximum capacity (5 vehicles).", found);
+      }
       String time = LocalTime.now().format(TIME_FORMAT) + " (Now)";
       found.put("status", "parked");
       found.put("time", time);
     }
     pushActivity("entry", "Token verified for " + token);
     return new VerifyResult(true, "Token verified! Access granted.", found);
+  }
+
+  private static int countZoneVehicles(String zone, String statusFilter) {
+    if (zone == null || zone.isBlank()) return 0;
+    int count = 0;
+    for (Map<String, Object> v : VEHICLES) {
+      String vZone = Objects.toString(v.get("zone"), "");
+      if (!zone.equalsIgnoreCase(vZone)) continue;
+      if (statusFilter != null) {
+        String status = Objects.toString(v.get("status"), "");
+        if (!statusFilter.equalsIgnoreCase(status)) continue;
+      }
+      count++;
+    }
+    return count;
   }
 
   static String safe(String value) {
@@ -191,6 +217,18 @@ final class DataStore {
     final Map<String, Object> vehicle;
 
     VerifyResult(boolean success, String msg, Map<String, Object> vehicle) {
+      this.success = success;
+      this.msg = msg;
+      this.vehicle = vehicle;
+    }
+  }
+
+  static final class BookingResult {
+    final boolean success;
+    final String msg;
+    final Map<String, Object> vehicle;
+
+    BookingResult(boolean success, String msg, Map<String, Object> vehicle) {
       this.success = success;
       this.msg = msg;
       this.vehicle = vehicle;

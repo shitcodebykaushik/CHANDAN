@@ -16,6 +16,94 @@ body {
   font-family: var(--font-mono);
 }
 
+.leaflet-container {
+  background: #0f172a;
+  font-family: var(--font-sans);
+}
+
+.mock-marker {
+  background: transparent;
+  border: 0;
+}
+
+.mock-marker__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.4);
+}
+
+.mock-marker--good .mock-marker__dot {
+  background: #10b981;
+}
+
+.mock-marker--warning .mock-marker__dot {
+  background: #f59e0b;
+}
+
+.mock-marker--critical .mock-marker__dot {
+  background: #ef4444;
+}
+
+.mock-zone-label {
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  color: #e2e8f0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.35);
+}
+
+.mock-zone-label__title {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mock-zone-label__meta {
+  font-size: 9px;
+  color: #94a3b8;
+}
+
+.mock-zone-label--good {
+  border-color: rgba(16, 185, 129, 0.5);
+}
+
+.mock-zone-label--warning {
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.mock-zone-label--critical {
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.mock-vehicle {
+  background: transparent;
+  border: 0;
+}
+
+.mock-vehicle__body {
+  width: 18px;
+  height: 10px;
+  background: linear-gradient(120deg, #38bdf8, #0ea5e9);
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.35);
+}
+
+.mock-vehicle__roof {
+  width: 10px;
+  height: 5px;
+  background: rgba(226, 232, 240, 0.9);
+  border-radius: 2px;
+  position: relative;
+  top: -9px;
+  left: 4px;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

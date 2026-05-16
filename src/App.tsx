@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard, Map as MapIcon, Car, AlertTriangle, Settings,
   Search, Bell, User, MapPin, Clock, ArrowUpRight, ArrowDownRight,
@@ -8,13 +8,8 @@ import {
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { cn } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
-import { APIProvider, Map, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
-
-const API_KEY =
-  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
-  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  '';
+import L from 'leaflet';
+import mockMap from './assets/mock-map.svg';
 
 // --- Mock Data ---
 const DEFAULT_OCCUPANCY_DATA = [
@@ -74,7 +69,6 @@ export default function App() {
   const [activity, setActivity] = useState<ActivityItem[]>(DEFAULT_ACTIVITY);
   const [vehicles, setVehicles] = useState<Vehicle[]>(DEFAULT_VEHICLES);
   const [markers, setMarkers] = useState<MapMarker[]>(DEFAULT_MARKERS);
-  const [mapKey, setMapKey] = useState(API_KEY);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -95,13 +89,12 @@ export default function App() {
     };
 
     const loadAll = async () => {
-      const [zonesData, occupancy, activityData, vehiclesData, markerData, config] = await Promise.all([
+      const [zonesData, occupancy, activityData, vehiclesData, markerData] = await Promise.all([
         fetchJson<Zone[]>('/api/zones'),
         fetchJson<OccupancyPoint[]>('/api/occupancy'),
         fetchJson<ActivityItem[]>('/api/activity'),
         fetchJson<Vehicle[]>('/api/vehicles'),
         fetchJson<MapMarker[]>('/api/markers'),
-        fetchJson<{ googleMapsPlatformKey?: string }>('/api/config'),
       ]);
 
       if (!isMounted) return;
@@ -110,14 +103,13 @@ export default function App() {
       if (activityData) setActivity(activityData);
       if (vehiclesData) setVehicles(vehiclesData);
       if (markerData) setMarkers(markerData);
-      if (config?.googleMapsPlatformKey && !mapKey) setMapKey(config.googleMapsPlatformKey);
     };
 
     loadAll();
     return () => {
       isMounted = false;
     };
-  }, [mapKey]);
+  }, []);
 
   const refreshVehicles = async () => {
     try {
@@ -136,6 +128,14 @@ export default function App() {
       return;
     }
   };
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshVehicles();
+      refreshActivity();
+    }, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="flex h-screen w-full bg-slate-50 text-slate-700 font-sans overflow-hidden">
@@ -159,7 +159,7 @@ export default function App() {
             </>
           ) : activeTab === 'Zone Map' ? (
             <div className="flex-1 w-full h-full p-6">
-              <MapPanel markers={markers} mapKey={mapKey} />
+              <MapPanel markers={markers} zones={zones} vehicles={vehicles} />
             </div>
           ) : activeTab === 'Vehicles' ? (
             <div className="flex-1 w-full h-full bg-slate-50 flex flex-col p-6 min-h-0">
@@ -548,58 +548,249 @@ function SystemStatus() {
   );
 }
 
-function MapPanel({ markers, mapKey }: { markers: MapMarker[], mapKey: string }) {
-  const hasValidKey = Boolean(mapKey) && mapKey !== 'YOUR_API_KEY';
-  if (!hasValidKey) {
-    return (
-      <div className="flex h-full items-center justify-center bg-white border border-slate-200 rounded-lg shadow-sm p-6 text-slate-700">
-        <div style={{textAlign:'center',maxWidth:520}}>
-          <h2 className="text-xl font-bold mb-4">Google Maps API Key Required</h2>
-          <p className="mb-2"><strong>Step 1:</strong> <a className="text-indigo-600 hover:underline" href="https://console.cloud.google.com/google/maps-apis/start" target="_blank" rel="noopener">Get an API Key</a></p>
-          <p className="mb-2"><strong>Step 2:</strong> Add your key as a secret in AI Studio:</p>
-          <ul style={{textAlign:'left',lineHeight:'1.8'}} className="list-disc ml-8 text-sm text-slate-600 mb-6">
-            <li>Open <strong>Settings</strong> (⚙️ gear icon, <strong>top-right corner</strong>)</li>
-            <li>Select <strong>Secrets</strong></li>
-            <li>Type <code>GOOGLE_MAPS_PLATFORM_KEY</code> as the secret name, press <strong>Enter</strong></li>
-            <li>Paste your API key as the value, press <strong>Enter</strong></li>
-          </ul>
-          <p className="text-xs text-slate-500">The app builds automatically after you add the secret.</p>
-        </div>
-      </div>
-    );
-  }
+function MapPanel({
+  markers,
+  zones,
+  vehicles,
+}: {
+  markers: MapMarker[];
+  zones: Zone[];
+  vehicles: Vehicle[];
+}) {
+  const fallbackMarkers = markers.length
+    ? markers
+    : [
+        { id: 'M-1', lat: 37.7849, lng: -122.4094, status: 'critical' },
+        { id: 'M-2', lat: 37.7649, lng: -122.4294, status: 'warning' },
+        { id: 'M-3', lat: 37.7739, lng: -122.4312, status: 'good' },
+        { id: 'M-4', lat: 37.7949, lng: -122.3994, status: 'good' },
+        { id: 'M-5', lat: 37.7549, lng: -122.4094, status: 'critical' },
+      ];
+
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const zoneLayerRef = useRef<L.LayerGroup | null>(null);
+  const zoneLabelLayerRef = useRef<L.LayerGroup | null>(null);
+  const vehicleLayerRef = useRef<L.LayerGroup | null>(null);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    const width = 1000;
+    const height = 1000;
+    const bounds = L.latLngBounds([0, 0], [height, width]);
+
+    if (!leafletMapRef.current) {
+      const map = L.map(mapRef.current, {
+        crs: L.CRS.Simple,
+        zoom: 0,
+        minZoom: -1,
+        maxZoom: 2,
+        attributionControl: false,
+        zoomControl: true,
+      });
+
+      L.imageOverlay(mockMap, bounds).addTo(map);
+      map.fitBounds(bounds);
+
+      leafletMapRef.current = map;
+      markerLayerRef.current = L.layerGroup().addTo(map);
+      zoneLayerRef.current = L.layerGroup().addTo(map);
+      zoneLabelLayerRef.current = L.layerGroup().addTo(map);
+      vehicleLayerRef.current = L.layerGroup().addTo(map);
+    }
+
+    const map = leafletMapRef.current;
+    const markerLayer = markerLayerRef.current;
+    const zoneLayer = zoneLayerRef.current;
+    const zoneLabelLayer = zoneLabelLayerRef.current;
+    const vehicleLayer = vehicleLayerRef.current;
+    if (!map || !markerLayer || !zoneLayer || !zoneLabelLayer || !vehicleLayer) return;
+
+    markerLayer.clearLayers();
+    zoneLayer.clearLayers();
+    zoneLabelLayer.clearLayers();
+    vehicleLayer.clearLayers();
+
+    const lats = fallbackMarkers.map((m) => m.lat);
+    const lngs = fallbackMarkers.map((m) => m.lng);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+
+    const toScaled = (value: number, min: number, max: number, scale: number) => {
+      if (max === min) return scale / 2;
+      return ((value - min) / (max - min)) * scale;
+    };
+
+    const layout = [
+      {
+        id: 'Z-Alpha',
+        bounds: [[140, 140], [420, 420]],
+        spots: [
+          [0.22, 0.25],
+          [0.52, 0.2],
+          [0.75, 0.35],
+          [0.3, 0.7],
+          [0.68, 0.72],
+        ],
+      },
+      {
+        id: 'Z-Beta',
+        bounds: [[140, 580], [420, 860]],
+        spots: [
+          [0.18, 0.3],
+          [0.42, 0.18],
+          [0.7, 0.25],
+          [0.28, 0.68],
+          [0.72, 0.72],
+        ],
+      },
+      {
+        id: 'Z-Gamma',
+        bounds: [[460, 140], [780, 420]],
+        spots: [
+          [0.2, 0.25],
+          [0.5, 0.2],
+          [0.75, 0.35],
+          [0.3, 0.7],
+          [0.7, 0.75],
+        ],
+      },
+      {
+        id: 'Z-Delta',
+        bounds: [[460, 460], [780, 700]],
+        spots: [
+          [0.2, 0.25],
+          [0.5, 0.18],
+          [0.78, 0.32],
+          [0.3, 0.72],
+          [0.7, 0.78],
+        ],
+      },
+      {
+        id: 'Z-Epsilon',
+        bounds: [[460, 720], [820, 880]],
+        spots: [
+          [0.2, 0.28],
+          [0.52, 0.2],
+          [0.78, 0.34],
+          [0.32, 0.7],
+          [0.72, 0.72],
+        ],
+      },
+    ] as const;
+
+    const zoneMap = new Map(zones.map((z) => [z.id, z]));
+    const vehicleCounts = new Map<string, number>();
+    vehicles.forEach((v) => {
+      const key = v.zone || '';
+      if (!key) return;
+      const count = vehicleCounts.get(key) || 0;
+      vehicleCounts.set(key, count + 1);
+    });
+
+    layout.forEach((zoneLayout) => {
+      const zone = zoneMap.get(zoneLayout.id);
+      const total = zone?.total ?? 1;
+      const occupied = vehicleCounts.get(zoneLayout.id) ?? zone?.occupied ?? 0;
+      const rate = Math.min(100, Math.max(0, (occupied / total) * 100));
+      let status = 'good';
+      if (rate > 90) status = 'critical';
+      else if (rate > 75) status = 'warning';
+
+      let fill = '#10b981';
+      let stroke = '#047857';
+      if (status === 'warning') {
+        fill = '#f59e0b';
+        stroke = '#b45309';
+      }
+      if (status === 'critical') {
+        fill = '#ef4444';
+        stroke = '#b91c1c';
+      }
+
+      const rect = L.rectangle(zoneLayout.bounds as L.LatLngBoundsExpression, {
+        color: stroke,
+        weight: 2,
+        fillColor: fill,
+        fillOpacity: 0.18,
+      });
+      rect.addTo(zoneLayer);
+
+      const center = L.latLngBounds(zoneLayout.bounds as L.LatLngBoundsExpression).getCenter();
+      const label = L.marker(center, {
+        icon: L.divIcon({
+          className: `mock-zone-label mock-zone-label--${status}`,
+          html:
+            `<div class="mock-zone-label__title">${zone?.name ?? zoneLayout.id}</div>` +
+            `<div class="mock-zone-label__meta">${zoneLayout.id} • ${rate.toFixed(0)}% OCC</div>`,
+          iconSize: [140, 40],
+          iconAnchor: [70, 20],
+        }),
+        interactive: false,
+      });
+      label.addTo(zoneLabelLayer);
+
+      const zoneVehicles = vehicles
+        .filter((v) => v.zone === zoneLayout.id && v.status === 'parked')
+        .slice(0, 5);
+
+      const [[minY, minX], [maxY, maxX]] = zoneLayout.bounds;
+      const zoneWidth = maxX - minX;
+      const zoneHeight = maxY - minY;
+
+      zoneVehicles.forEach((vehicle, index) => {
+        const spot = zoneLayout.spots[index] || [0.5, 0.5];
+        const y = minY + zoneHeight * spot[0];
+        const x = minX + zoneWidth * spot[1];
+        const icon = L.divIcon({
+          className: 'mock-vehicle',
+          html: '<div class="mock-vehicle__body"></div><div class="mock-vehicle__roof"></div>',
+          iconSize: [18, 12],
+          iconAnchor: [9, 6],
+        });
+
+        L.marker([y, x], { icon })
+          .bindPopup(
+            `<div class="text-xs font-semibold text-slate-800">${vehicle.plate}</div>` +
+            `<div class="text-[10px] uppercase text-slate-500">${zoneLayout.id}</div>`
+          )
+          .addTo(vehicleLayer);
+      });
+    });
+
+    fallbackMarkers.forEach((marker) => {
+      const x = toScaled(marker.lng, minLng, maxLng, width);
+      const y = height - toScaled(marker.lat, minLat, maxLat, height);
+      const status = marker.status || 'good';
+      const icon = L.divIcon({
+        className: `mock-marker mock-marker--${status}`,
+        html: '<div class="mock-marker__dot"></div>',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+
+      L.marker([y, x], { icon })
+        .bindPopup(
+          `<div class="text-xs font-semibold text-slate-800">${marker.id}</div>` +
+          `<div class="text-[10px] uppercase text-slate-500">${status}</div>`
+        )
+        .addTo(markerLayer);
+    });
+
+    return () => {
+      map.invalidateSize();
+    };
+  }, [fallbackMarkers, zones, vehicles]);
 
   return (
-    <div className="w-full h-full rounded-lg overflow-hidden border border-slate-200 shadow-sm relative">
-       <APIProvider apiKey={mapKey} version="weekly">
-        <Map
-          defaultCenter={{lat: 37.7749, lng: -122.4194}}
-          defaultZoom={13}
-          mapId="DEMO_MAP_ID"
-          internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-          style={{width: '100%', height: '100%'}}
-        >
-          {markers.map(marker => {
-            let background = '#10b981';
-            let borderColor = '#047857';
-            if (marker.status === 'warning') {
-              background = '#f59e0b';
-              borderColor = '#b45309';
-            }
-            if (marker.status === 'critical') {
-              background = '#ef4444';
-              borderColor = '#b91c1c';
-            }
-            return (
-              <AdvancedMarker key={marker.id} position={{lat: marker.lat, lng: marker.lng}}>
-                <Pin background={background} glyphColor="#fff" borderColor={borderColor} />
-              </AdvancedMarker>
-            );
-          })}
-        </Map>
-      </APIProvider>
+    <div className="w-full h-full rounded-lg overflow-hidden border border-slate-200 shadow-sm">
+      <div ref={mapRef} className="h-full w-full" />
     </div>
-  )
+  );
 }
 
 function VehiclesPanel({
@@ -621,6 +812,7 @@ function VehiclesPanel({
   const [bookPlate, setBookPlate] = useState('');
   const [bookZone, setBookZone] = useState('Z-Alpha');
   const [generatedToken, setGeneratedToken] = useState('');
+  const [bookingError, setBookingError] = useState('');
 
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [verifyToken, setVerifyToken] = useState('');
@@ -643,12 +835,17 @@ function VehiclesPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plate: bookPlate, zone: bookZone }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null);
+        setBookingError(errorBody?.error || 'Booking failed.');
+        return;
+      }
       const data = await res.json();
       if (data?.vehicle) {
         setVehicles((prev) => [data.vehicle, ...prev]);
       }
       if (data?.token) setGeneratedToken(data.token);
+      setBookingError('');
       await refreshVehicles();
       await refreshActivity();
     } catch {
@@ -660,6 +857,7 @@ function VehiclesPanel({
     setShowBookModal(false);
     setBookPlate('');
     setGeneratedToken('');
+    setBookingError('');
   };
 
   const handleVerify = async (e: React.FormEvent) => {
@@ -855,6 +1053,9 @@ function VehiclesPanel({
                   >
                     Generate Token
                   </button>
+                  {bookingError && (
+                    <div className="text-xs text-rose-600 font-semibold text-center">{bookingError}</div>
+                  )}
                 </form>
               </>
             )}
