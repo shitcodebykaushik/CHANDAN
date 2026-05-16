@@ -15,10 +15,9 @@ const API_KEY =
   (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
   (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
   '';
-const hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
 
 // --- Mock Data ---
-const OCCUPANCY_DATA = [
+const DEFAULT_OCCUPANCY_DATA = [
   { time: '06:00', occupancy: 20 },
   { time: '08:00', occupancy: 65 },
   { time: '10:00', occupancy: 85 },
@@ -30,7 +29,7 @@ const OCCUPANCY_DATA = [
   { time: '22:00', occupancy: 15 },
 ];
 
-const ZONES = [
+const DEFAULT_ZONES = [
   { id: 'Z-Alpha', name: 'Downtown Core', total: 450, occupied: 412, status: 'critical' },
   { id: 'Z-Beta', name: 'Financial District', total: 320, occupied: 298, status: 'warning' },
   { id: 'Z-Gamma', name: 'Tech Park', total: 800, occupied: 450, status: 'good' },
@@ -38,7 +37,7 @@ const ZONES = [
   { id: 'Z-Epsilon', name: 'Transit Hub', total: 600, occupied: 580, status: 'critical' },
 ];
 
-const ACTIVITY = [
+const DEFAULT_ACTIVITY = [
   { id: 1, type: 'violation', msg: 'Overstay detected at Z-Alpha / Spot 42', time: '2 min ago' },
   { id: 2, type: 'entry', msg: 'Vehicle entered Z-Beta / Gate 2', time: '4 min ago' },
   { id: 3, type: 'alert', msg: 'Sensor offline in Z-Gamma / Level 2', time: '12 min ago' },
@@ -46,14 +45,97 @@ const ACTIVITY = [
   { id: 5, type: 'entry', msg: 'Vehicle entered Z-Alpha / Gate 4', time: '18 min ago' },
 ];
 
+const DEFAULT_VEHICLES = [
+  { id: 'V-101', plate: 'XYZ-1234', status: 'parked', token: 'TKN-A1B2C3', zone: 'Z-Alpha', time: '10:42' },
+  { id: 'V-102', plate: 'ABC-9876', status: 'parked', token: 'TKN-X9Y8Z7', zone: 'Z-Beta', time: '09:15' },
+  { id: 'V-103', plate: 'LMN-4567', status: 'booked', token: 'TKN-QW3E4R', zone: 'Z-Gamma', time: '-' },
+  { id: 'V-104', plate: 'PQR-1122', status: 'parked', token: 'TKN-H8J9K0', zone: 'Z-Alpha', time: '11:00' },
+];
+
+const DEFAULT_MARKERS = [
+  { id: 'M-1', lat: 37.7849, lng: -122.4094, status: 'critical' },
+  { id: 'M-2', lat: 37.7649, lng: -122.4294, status: 'warning' },
+  { id: 'M-3', lat: 37.7739, lng: -122.4312, status: 'good' },
+  { id: 'M-4', lat: 37.7949, lng: -122.3994, status: 'good' },
+  { id: 'M-5', lat: 37.7549, lng: -122.4094, status: 'critical' },
+];
+
+type Zone = typeof DEFAULT_ZONES[number];
+type ActivityItem = typeof DEFAULT_ACTIVITY[number];
+type Vehicle = typeof DEFAULT_VEHICLES[number];
+type OccupancyPoint = typeof DEFAULT_OCCUPANCY_DATA[number];
+type MapMarker = typeof DEFAULT_MARKERS[number];
+
 export default function App() {
   const [time, setTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState('Dashboard');
+  const [zones, setZones] = useState<Zone[]>(DEFAULT_ZONES);
+  const [occupancyData, setOccupancyData] = useState<OccupancyPoint[]>(DEFAULT_OCCUPANCY_DATA);
+  const [activity, setActivity] = useState<ActivityItem[]>(DEFAULT_ACTIVITY);
+  const [vehicles, setVehicles] = useState<Vehicle[]>(DEFAULT_VEHICLES);
+  const [markers, setMarkers] = useState<MapMarker[]>(DEFAULT_MARKERS);
+  const [mapKey, setMapKey] = useState(API_KEY);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchJson = async <T,>(url: string): Promise<T | null> => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return (await res.json()) as T;
+      } catch {
+        return null;
+      }
+    };
+
+    const loadAll = async () => {
+      const [zonesData, occupancy, activityData, vehiclesData, markerData, config] = await Promise.all([
+        fetchJson<Zone[]>('/api/zones'),
+        fetchJson<OccupancyPoint[]>('/api/occupancy'),
+        fetchJson<ActivityItem[]>('/api/activity'),
+        fetchJson<Vehicle[]>('/api/vehicles'),
+        fetchJson<MapMarker[]>('/api/markers'),
+        fetchJson<{ googleMapsPlatformKey?: string }>('/api/config'),
+      ]);
+
+      if (!isMounted) return;
+      if (zonesData) setZones(zonesData);
+      if (occupancy) setOccupancyData(occupancy);
+      if (activityData) setActivity(activityData);
+      if (vehiclesData) setVehicles(vehiclesData);
+      if (markerData) setMarkers(markerData);
+      if (config?.googleMapsPlatformKey && !mapKey) setMapKey(config.googleMapsPlatformKey);
+    };
+
+    loadAll();
+    return () => {
+      isMounted = false;
+    };
+  }, [mapKey]);
+
+  const refreshVehicles = async () => {
+    try {
+      const res = await fetch('/api/vehicles');
+      if (res.ok) setVehicles(await res.json());
+    } catch {
+      return;
+    }
+  };
+
+  const refreshActivity = async () => {
+    try {
+      const res = await fetch('/api/activity');
+      if (res.ok) setActivity(await res.json());
+    } catch {
+      return;
+    }
+  };
 
   return (
     <div className="flex h-screen w-full bg-slate-50 text-slate-700 font-sans overflow-hidden">
@@ -66,22 +148,28 @@ export default function App() {
               <HeroStats />
               <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-0 overflow-hidden">
                 <div className="xl:col-span-8 p-6 flex flex-col gap-6 border-r border-slate-200 bg-white">
-                  <ZoneGrid />
-                  <AnalyticsChart />
+                  <ZoneGrid zones={zones} />
+                  <AnalyticsChart data={occupancyData} />
                 </div>
                 <div className="xl:col-span-4 bg-slate-50 flex flex-col">
-                  <ActivityFeed />
+                  <ActivityFeed activity={activity} />
                   <SystemStatus />
                 </div>
               </div>
             </>
           ) : activeTab === 'Zone Map' ? (
             <div className="flex-1 w-full h-full p-6">
-              <MapPanel />
+              <MapPanel markers={markers} mapKey={mapKey} />
             </div>
           ) : activeTab === 'Vehicles' ? (
             <div className="flex-1 w-full h-full bg-slate-50 flex flex-col p-6 min-h-0">
-              <VehiclesPanel />
+              <VehiclesPanel
+                vehicles={vehicles}
+                setVehicles={setVehicles}
+                refreshVehicles={refreshVehicles}
+                refreshActivity={refreshActivity}
+                zones={zones}
+              />
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">
@@ -231,7 +319,7 @@ function HeroStats() {
   );
 }
 
-function ZoneGrid() {
+function ZoneGrid({ zones }: { zones: Zone[] }) {
   return (
     <div className="bg-white border border-slate-200 shadow-sm rounded-lg p-6">
       <div className="flex items-center justify-between mb-6">
@@ -246,7 +334,7 @@ function ZoneGrid() {
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {ZONES.map((zone, i) => {
+        {zones.map((zone, i) => {
           const occupancyRate = (zone.occupied / zone.total) * 100;
           let barColor = 'bg-indigo-500';
           let textColor = 'text-indigo-700';
@@ -300,7 +388,7 @@ function ZoneGrid() {
   );
 }
 
-function AnalyticsChart() {
+function AnalyticsChart({ data }: { data: OccupancyPoint[] }) {
   return (
     <div className="bg-white border border-slate-200 shadow-sm rounded-lg p-6">
       <div className="flex items-center justify-between mb-6">
@@ -315,7 +403,7 @@ function AnalyticsChart() {
       
       <div className="h-[200px] w-full text-[10px] font-mono">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={OCCUPANCY_DATA} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+          <AreaChart data={data} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="colorOccupancy" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.2} />
@@ -344,12 +432,12 @@ function AnalyticsChart() {
   );
 }
 
-function ActivityFeed() {
+function ActivityFeed({ activity }: { activity: ActivityItem[] }) {
   const [filter, setFilter] = useState('all');
 
   const filteredActivity = filter === 'all' 
-    ? ACTIVITY 
-    : ACTIVITY.filter(a => a.type === filter);
+    ? activity 
+    : activity.filter(a => a.type === filter);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 border-b border-slate-200">
@@ -460,7 +548,8 @@ function SystemStatus() {
   );
 }
 
-function MapPanel() {
+function MapPanel({ markers, mapKey }: { markers: MapMarker[], mapKey: string }) {
+  const hasValidKey = Boolean(mapKey) && mapKey !== 'YOUR_API_KEY';
   if (!hasValidKey) {
     return (
       <div className="flex h-full items-center justify-center bg-white border border-slate-200 rounded-lg shadow-sm p-6 text-slate-700">
@@ -482,7 +571,7 @@ function MapPanel() {
 
   return (
     <div className="w-full h-full rounded-lg overflow-hidden border border-slate-200 shadow-sm relative">
-       <APIProvider apiKey={API_KEY} version="weekly">
+       <APIProvider apiKey={mapKey} version="weekly">
         <Map
           defaultCenter={{lat: 37.7749, lng: -122.4194}}
           defaultZoom={13}
@@ -490,34 +579,42 @@ function MapPanel() {
           internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
           style={{width: '100%', height: '100%'}}
         >
-          <AdvancedMarker position={{lat: 37.7849, lng: -122.4094}}>
-             <Pin background="#ef4444" glyphColor="#fff" borderColor="#b91c1c" />
-          </AdvancedMarker>
-          <AdvancedMarker position={{lat: 37.7649, lng: -122.4294}}>
-             <Pin background="#f59e0b" glyphColor="#fff" borderColor="#b45309" />
-          </AdvancedMarker>
-          <AdvancedMarker position={{lat: 37.7739, lng: -122.4312}}>
-             <Pin background="#10b981" glyphColor="#fff" borderColor="#047857" />
-          </AdvancedMarker>
-          <AdvancedMarker position={{lat: 37.7949, lng: -122.3994}}>
-             <Pin background="#10b981" glyphColor="#fff" borderColor="#047857" />
-          </AdvancedMarker>
-          <AdvancedMarker position={{lat: 37.7549, lng: -122.4094}}>
-             <Pin background="#ef4444" glyphColor="#fff" borderColor="#b91c1c" />
-          </AdvancedMarker>
+          {markers.map(marker => {
+            let background = '#10b981';
+            let borderColor = '#047857';
+            if (marker.status === 'warning') {
+              background = '#f59e0b';
+              borderColor = '#b45309';
+            }
+            if (marker.status === 'critical') {
+              background = '#ef4444';
+              borderColor = '#b91c1c';
+            }
+            return (
+              <AdvancedMarker key={marker.id} position={{lat: marker.lat, lng: marker.lng}}>
+                <Pin background={background} glyphColor="#fff" borderColor={borderColor} />
+              </AdvancedMarker>
+            );
+          })}
         </Map>
       </APIProvider>
     </div>
   )
 }
 
-function VehiclesPanel() {
-  const [vehicles, setVehicles] = useState([
-    { id: 'V-101', plate: 'XYZ-1234', status: 'parked', token: 'TKN-A1B2C3', zone: 'Z-Alpha', time: '10:42 AM' },
-    { id: 'V-102', plate: 'ABC-9876', status: 'parked', token: 'TKN-X9Y8Z7', zone: 'Z-Beta', time: '09:15 AM' },
-    { id: 'V-103', plate: 'LMN-4567', status: 'booked', token: 'TKN-QW3E4R', zone: 'Z-Gamma', time: '-' },
-    { id: 'V-104', plate: 'PQR-1122', status: 'parked', token: 'TKN-H8J9K0', zone: 'Z-Alpha', time: '11:00 AM' },
-  ]);
+function VehiclesPanel({
+  vehicles,
+  setVehicles,
+  refreshVehicles,
+  refreshActivity,
+  zones,
+}: {
+  vehicles: Vehicle[];
+  setVehicles: React.Dispatch<React.SetStateAction<Vehicle[]>>;
+  refreshVehicles: () => Promise<void>;
+  refreshActivity: () => Promise<void>;
+  zones: Zone[];
+}) {
   const [search, setSearch] = useState('');
   
   const [showBookModal, setShowBookModal] = useState(false);
@@ -537,20 +634,26 @@ function VehiclesPanel() {
     v.id.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleBook = (e: React.FormEvent) => {
+  const handleBook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bookPlate.trim()) return;
-    const token = 'TKN-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    const newVehicle = {
-      id: 'V-' + Math.floor(Math.random() * 1000 + 200),
-      plate: bookPlate.toUpperCase(),
-      status: 'booked',
-      token: token,
-      zone: bookZone,
-      time: '-'
-    };
-    setVehicles([newVehicle, ...vehicles]);
-    setGeneratedToken(token);
+    try {
+      const res = await fetch('/api/vehicles/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plate: bookPlate, zone: bookZone }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.vehicle) {
+        setVehicles((prev) => [data.vehicle, ...prev]);
+      }
+      if (data?.token) setGeneratedToken(data.token);
+      await refreshVehicles();
+      await refreshActivity();
+    } catch {
+      return;
+    }
   };
 
   const resetBooking = () => {
@@ -559,24 +662,28 @@ function VehiclesPanel() {
     setGeneratedToken('');
   };
 
-  const handleVerify = (e: React.FormEvent) => {
+  const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!verifyToken.trim()) return;
-    const index = vehicles.findIndex(v => v.token.toUpperCase() === verifyToken.toUpperCase());
-    if (index === -1) {
-      setVerifyResult({ success: false, msg: 'Invalid Token. No matching booking found.' });
+    try {
+      const res = await fetch('/api/vehicles/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verifyToken }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.vehicle) {
+        setVehicles((prev) => prev.map(v => v.id === data.vehicle.id ? data.vehicle : v));
+      }
+      if (typeof data?.success === 'boolean' && data?.msg) {
+        setVerifyResult({ success: data.success, msg: data.msg });
+      }
+      await refreshVehicles();
+      await refreshActivity();
+    } catch {
       return;
     }
-    const vehicle = vehicles[index];
-    if (vehicle.status === 'parked') {
-      setVerifyResult({ success: false, msg: `Vehicle ${vehicle.plate} is already parked.` });
-      return;
-    }
-
-    const updated = [...vehicles];
-    updated[index] = { ...vehicle, status: 'parked', time: new Date().toLocaleTimeString('en-US', { hour12: false }).substring(0,5) + ' (Now)' };
-    setVehicles(updated);
-    setVerifyResult({ success: true, msg: `Token verified! ${vehicle.plate} allowed to enter ${vehicle.zone}.` });
   };
 
   const resetVerify = () => {
@@ -736,7 +843,7 @@ function VehiclesPanel() {
                       onChange={(e) => setBookZone(e.target.value)}
                       className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                     >
-                      {ZONES.map(z => (
+                      {zones.map(z => (
                         <option key={z.id} value={z.id}>{z.name} ({z.id})</option>
                       ))}
                     </select>

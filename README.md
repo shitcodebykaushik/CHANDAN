@@ -1,20 +1,27 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/9413f969-3a24-4c6f-ab84-4bbd8d3f27a0
-
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js, Java 17+
 
+### Frontend (dev)
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Run the app:
    `npm run dev`
+
+### Backend (Java HttpServer)
+
+1. Build the frontend assets:
+   `npm run build`
+2. Compile the server:
+   `javac -d server/out server/src/Main.java`
+3. Run the server:
+   `java -cp server/out Main`
+
+The server runs on `http://localhost:8080` by default and serves both the API and the built frontend.
+
+### Environment Variables
+
+- `GOOGLE_MAPS_PLATFORM_KEY`: Google Maps API key for the map.
+- `PORT`: Override the backend port (default 8080).
+- `HOST`: Bind the backend to a specific interface (optional).
